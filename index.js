@@ -35,12 +35,12 @@ async function handleMessage(msg, sock) {
 
     console.log(`[Message] From: ${senderJid} Text: ${text}`);
 
-    // Check if we are waiting for a clarification from the owner
-    let messageToProcess = text;
+    // Check if we are waiting for a clarification/confirmation from the owner
+    let messageToProcess = `User: "${text}"`;
     let isClarification = false;
     if (pendingClarifications.has(senderJid)) {
         const pending = pendingClarifications.get(senderJid);
-        messageToProcess = `Original request: "${pending.originalMessage}"\nUser Clarification: "${text}"`;
+        messageToProcess = `${pending.history}\nUser: "${text}"`;
         isClarification = true;
         pendingClarifications.delete(senderJid); // Clear pending state
     }
@@ -50,33 +50,34 @@ async function handleMessage(msg, sock) {
     const extraction = await extractReminderIntent(messageToProcess, timezone);
 
     if (extraction && extraction.isReminderRequest) {
-        if (extraction.needsClarification) {
-            // Ask for clarification
-            await sock.sendMessage(remoteJid, { 
-                text: extraction.clarificationQuestion || "Could you clarify the time or details?" 
-            });
-            // STORE pending state
+        // If we need clarification, or we need confirmation, OR it's simply not confirmed yet
+        if (extraction.needsClarification || extraction.needsConfirmation || !extraction.isConfirmed) {
+            // Ask for clarification or confirmation
+            const botReply = extraction.botReply || "מתי תרצה שאזכיר לך?";
+            await sock.sendMessage(remoteJid, { text: botReply });
+            
+            // STORE pending state with the full conversation history
             pendingClarifications.set(senderJid, {
-                originalMessage: messageToProcess
+                history: `${messageToProcess}\nBot: "${botReply}"`
             });
-        } else if (extraction.scheduledTimeISO) {
-            // Valid reminder setup
+        } else if (extraction.scheduledTimeISO && extraction.isConfirmed) {
+            // Valid confirmed reminder setup
             addReminder({
                 ownerJid: remoteJid, // where to send it
                 originalMessage: messageToProcess,
                 reminderText: extraction.reminderText || extraction.title,
                 scheduledTimeISO: extraction.scheduledTimeISO,
                 timezone: timezone,
-                sourceType: isClarification ? "clarified" : "explicit"
+                sourceType: isClarification ? "clarified_and_confirmed" : "explicit"
             });
             
             await sock.sendMessage(remoteJid, { 
-                text: `✅ Reminder saved for ${new Date(extraction.scheduledTimeISO).toLocaleString('en-US', {timeZone: timezone})}:\n"${extraction.reminderText || extraction.title}"`
+                text: `✅ התזכורת נשמרה בהצלחה ל-${new Date(extraction.scheduledTimeISO).toLocaleString('he-IL', {timeZone: timezone})}:\n"${extraction.reminderText || extraction.title}"`
             });
         } else {
             // Edge case failure
             await sock.sendMessage(remoteJid, { 
-                text: `I understood you wanted a reminder, but I couldn't figure out the exact time. Try again?`
+                text: `הבנתי שרצית תזכורת, אבל לא הצלחתי להבין מתי בדיוק. נסה שוב?`
             });
         }
     } else {
