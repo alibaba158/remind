@@ -1,0 +1,7 @@
+node_modules/
+.env
+session/
+auth/
+baileys_store.json
+temp/
+tmp/
