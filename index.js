@@ -16,6 +16,30 @@ function normalizeJid(jid) {
     return jid.replace(/:.*@/, "@");
 }
 
+let reminderGroupJid = null;
+
+async function ensureReminderGroup(sock) {
+    try {
+        const ownerJidTarget = `${process.env.OWNER_NUMBER}@s.whatsapp.net`;
+        const groups = await sock.groupFetchAllParticipating();
+        for (const [id, group] of Object.entries(groups)) {
+            if (group.subject === "התזכורות שלי") {
+                reminderGroupJid = id;
+                console.log("[Bot] Found existing reminders group:", id);
+                return;
+            }
+        }
+        
+        console.log("[Bot] Creating new reminders group...");
+        const group = await sock.groupCreate("התזכורות שלי", [ownerJidTarget]);
+        reminderGroupJid = group.id;
+        
+        await sock.sendMessage(reminderGroupJid, { text: "שלום! הקבוצה הזו נוצרה אוטומטית כדי לרכז את כל התזכורות שלך במקום אחד. אפשר להתכתב איתי כאן! 😊" });
+    } catch (e) {
+        console.error("Failed to setup reminder group:", e);
+    }
+}
+
 async function handleMessage(msg, sock) {
     const ownerNumber = process.env.OWNER_NUMBER;
     const remoteJid = msg.key.remoteJid;
@@ -66,7 +90,7 @@ async function handleMessage(msg, sock) {
             });
         } else if (aiResponse.scheduledTimeISO && aiResponse.isConfirmed) {
             addReminder({
-                ownerJid: remoteJid, // where to send it
+                ownerJid: reminderGroupJid || remoteJid, // Always prefer sending the actual scheduled reminder to the dedicated group!
                 originalMessage: messageToProcess,
                 reminderText: aiResponse.reminderText || aiResponse.title,
                 scheduledTimeISO: aiResponse.scheduledTimeISO,
@@ -84,7 +108,8 @@ async function handleMessage(msg, sock) {
     }
 
     if (finalMessage) {
-        const payloadText = `*🤖 מזכיר לך!:*\n${finalMessage}`;
+        const prefix = aiResponse.isReminderRequest ? "*🤖 יצירת תזכורת:*\n" : "*🤖 בוט התזכורות:*\n";
+        const payloadText = `${prefix}${finalMessage}`;
         console.log("[Bot] Sending message:", payloadText);
         await sock.sendMessage(remoteJid, { text: payloadText });
     }
@@ -100,8 +125,14 @@ async function start() {
 
     const sock = await connectToWhatsApp(handleMessage);
     
+    sock.ev.on('connection.update', async (update) => {
+        if (update.connection === 'open') {
+            await ensureReminderGroup(sock);
+        }
+    });
+    
     startScheduler(async (jid, text) => {
-        await sock.sendMessage(jid, { text });
+        await sock.sendMessage(jid, { text: `*🤖 מזכיר לך!:*\n${text}` });
     });
 }
 
