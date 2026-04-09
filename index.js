@@ -47,13 +47,16 @@ async function handleMessage(msg, sock) {
 
     // Process with Gemini for reminder extraction
     const timezone = process.env.TIMEZONE || 'UTC';
+    console.log("[Bot] Asking Gemini to extract intent...");
     const extraction = await extractReminderIntent(messageToProcess, timezone);
+    console.log("[Bot] Extraction result:", extraction);
 
     if (extraction && extraction.isReminderRequest) {
         // If we need clarification, or we need confirmation, OR it's simply not confirmed yet
         if (extraction.needsClarification || extraction.needsConfirmation || !extraction.isConfirmed) {
             // Ask for clarification or confirmation
             const botReply = extraction.botReply || "מתי תרצה שאזכיר לך?";
+            console.log("[Bot] Sending clarification:", botReply);
             await sock.sendMessage(remoteJid, { text: botReply });
             
             // STORE pending state with the full conversation history
@@ -62,6 +65,7 @@ async function handleMessage(msg, sock) {
             });
         } else if (extraction.scheduledTimeISO && extraction.isConfirmed) {
             // Valid confirmed reminder setup
+            console.log("[Bot] Saving confirmed reminder...");
             addReminder({
                 ownerJid: remoteJid, // where to send it
                 originalMessage: messageToProcess,
@@ -71,18 +75,21 @@ async function handleMessage(msg, sock) {
                 sourceType: isClarification ? "clarified_and_confirmed" : "explicit"
             });
             
-            await sock.sendMessage(remoteJid, { 
-                text: `✅ התזכורת נשמרה בהצלחה ל-${new Date(extraction.scheduledTimeISO).toLocaleString('he-IL', {timeZone: timezone})}:\n"${extraction.reminderText || extraction.title}"`
-            });
+            const successReply = `✅ התזכורת נשמרה בהצלחה ל-${new Date(extraction.scheduledTimeISO).toLocaleString('he-IL', {timeZone: timezone})}:\n"${extraction.reminderText || extraction.title}"`;
+            console.log("[Bot] Sending success message:", successReply);
+            await sock.sendMessage(remoteJid, { text: successReply });
         } else {
             // Edge case failure
+            console.log("[Bot] Edge case failure during confirmation.");
             await sock.sendMessage(remoteJid, { 
                 text: `הבנתי שרצית תזכורת, אבל לא הצלחתי להבין מתי בדיוק. נסה שוב?`
             });
         }
     } else {
         // Not a reminder request, do normal chat
+        console.log("[Bot] Not a reminder. Asking Gemini for chat reply...");
         const reply = await generateChatReply(text);
+        console.log("[Bot] Chat reply:", reply);
         if (reply) {
             await sock.sendMessage(remoteJid, { text: reply });
         }
