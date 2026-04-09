@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { connectToWhatsApp } from './lib/whatsapp.js';
-import { extractReminderIntent, generateChatReply } from './lib/gemini.js';
-import { loadReminders, addReminder } from './lib/reminders.js';
+import { processBotMessage } from './lib/gemini.js';
+import { loadReminders, addReminder, getRemindersFor } from './lib/reminders.js';
 import { startScheduler } from './lib/scheduler.js';
 
 // Load reminders from disk
@@ -45,54 +45,48 @@ async function handleMessage(msg, sock) {
         pendingClarifications.delete(senderJid); // Clear pending state
     }
 
-    // Process with Gemini for reminder extraction
+    // Process with Gemini for reminder extraction & chat
     const timezone = process.env.TIMEZONE || 'UTC';
-    console.log("[Bot] Asking Gemini to extract intent...");
-    const extraction = await extractReminderIntent(messageToProcess, timezone);
-    console.log("[Bot] Extraction result:", extraction);
+    const userReminders = getRemindersFor(remoteJid);
+    console.log("[Bot] Asking Gemini to process intent...");
+    const aiResponse = await processBotMessage(messageToProcess, timezone, userReminders);
+    console.log("[Bot] AI result:", aiResponse);
 
-    if (extraction && extraction.isReminderRequest) {
-        // If we need clarification, or we need confirmation, OR it's simply not confirmed yet
-        if (extraction.needsClarification || extraction.needsConfirmation || !extraction.isConfirmed) {
-            // Ask for clarification or confirmation
-            const botReply = extraction.botReply || "מתי תרצה שאזכיר לך?";
-            console.log("[Bot] Sending clarification:", botReply);
-            await sock.sendMessage(remoteJid, { text: botReply });
+    if (!aiResponse) return; // Handle error gracefully
+
+    let finalMessage = "";
+
+    if (aiResponse.isReminderRequest) {
+        // Handling a reminder request
+        if (aiResponse.needsConfirmation || !aiResponse.isConfirmed) {
+            finalMessage = aiResponse.botReply || "מתי תרצה שאזכיר לך?";
             
-            // STORE pending state with the full conversation history
             pendingClarifications.set(senderJid, {
-                history: `${messageToProcess}\nBot: "${botReply}"`
+                history: `${messageToProcess}\nBot: "${finalMessage}"`
             });
-        } else if (extraction.scheduledTimeISO && extraction.isConfirmed) {
-            // Valid confirmed reminder setup
-            console.log("[Bot] Saving confirmed reminder...");
+        } else if (aiResponse.scheduledTimeISO && aiResponse.isConfirmed) {
             addReminder({
                 ownerJid: remoteJid, // where to send it
                 originalMessage: messageToProcess,
-                reminderText: extraction.reminderText || extraction.title,
-                scheduledTimeISO: extraction.scheduledTimeISO,
+                reminderText: aiResponse.reminderText || aiResponse.title,
+                scheduledTimeISO: aiResponse.scheduledTimeISO,
                 timezone: timezone,
                 sourceType: isClarification ? "clarified_and_confirmed" : "explicit"
             });
             
-            const successReply = `✅ התזכורת נשמרה בהצלחה ל-${new Date(extraction.scheduledTimeISO).toLocaleString('he-IL', {timeZone: timezone})}:\n"${extraction.reminderText || extraction.title}"`;
-            console.log("[Bot] Sending success message:", successReply);
-            await sock.sendMessage(remoteJid, { text: successReply });
+            finalMessage = `✅ התזכורת נשמרה בהצלחה ל-${new Date(aiResponse.scheduledTimeISO).toLocaleString('he-IL', {timeZone: timezone})}:\n"${aiResponse.reminderText || aiResponse.title}"`;
         } else {
-            // Edge case failure
-            console.log("[Bot] Edge case failure during confirmation.");
-            await sock.sendMessage(remoteJid, { 
-                text: `הבנתי שרצית תזכורת, אבל לא הצלחתי להבין מתי בדיוק. נסה שוב?`
-            });
+            finalMessage = `הבנתי שרצית תזכורת, אבל לא הצלחתי להבין מתי בדיוק. נסה שוב?`;
         }
     } else {
-        // Not a reminder request, do normal chat
-        console.log("[Bot] Not a reminder. Asking Gemini for chat reply...");
-        const reply = await generateChatReply(text);
-        console.log("[Bot] Chat reply:", reply);
-        if (reply) {
-            await sock.sendMessage(remoteJid, { text: reply });
-        }
+        // Natural conversational reply (or listing tasks based on botReply)
+        finalMessage = aiResponse.botReply || "לא הבנתי את כוונתך. איך אוכל לעזור?";
+    }
+
+    if (finalMessage) {
+        const payloadText = `*🤖 מזכיר לך!:*\n${finalMessage}`;
+        console.log("[Bot] Sending message:", payloadText);
+        await sock.sendMessage(remoteJid, { text: payloadText });
     }
 }
 
