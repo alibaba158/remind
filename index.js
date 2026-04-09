@@ -44,12 +44,19 @@ async function handleMessage(msg, sock) {
     const ownerNumber = process.env.OWNER_NUMBER;
     const remoteJid = msg.key.remoteJid;
     const isFromMe = msg.key.fromMe;
+    const selfJid = normalizeJid(sock.user.id);
     const senderJid = normalizeJid(isFromMe ? sock.user.id : msg.key.participant || msg.key.remoteJid);
     const ownerJidTarget = `${ownerNumber}@s.whatsapp.net`;
     
     // Only process owner messages
     if (senderJid !== ownerJidTarget) {
         return; 
+    }
+
+    // STRICTLY ignore messages if they are not in the dedicated group or a direct message to the bot/self!
+    // This prevents the bot from answering every time the owner texts their mom or types in a family group.
+    if (remoteJid !== reminderGroupJid && remoteJid !== ownerJidTarget && remoteJid !== selfJid) {
+        return;
     }
 
     const text = msg.message.conversation || 
